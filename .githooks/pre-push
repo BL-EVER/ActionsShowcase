@@ -1,35 +1,44 @@
 #!/usr/bin/env bash
-# Print up front so it's obvious the hook fired (CLI or VS Output > Source Control - Git).
 echo "[pre-push] starting..." >&2
 
 set -e
 
-# Locate dotnet. Visual Studio's git child process often has a stripped PATH
-# (no dotnet entry), so probe the canonical install locations first and only
-# fall back to PATH. Use -f (file exists), not -x: Windows .exe files under
-# Program Files don't carry the Unix executable bit that Git Bash's -x checks.
+# This hook may run under Git Bash (mingw, paths like /c/Program Files/...)
+# OR under WSL (Linux, paths like /mnt/c/Program Files/...) depending on which
+# bash the host git resolved via the shebang. Visual Studio 2026 picks WSL on
+# some setups; the CLI/PowerShell path resolves to Git Bash. Handle both.
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    WIN_C="/mnt/c"
+else
+    WIN_C="/c"
+fi
+
 DOTNET=""
 for candidate in \
+    "$WIN_C/Program Files/dotnet/dotnet.exe" \
+    "$WIN_C/Program Files (x86)/dotnet/dotnet.exe" \
     "/c/Program Files/dotnet/dotnet.exe" \
+    "/mnt/c/Program Files/dotnet/dotnet.exe" \
     "/c/Program Files (x86)/dotnet/dotnet.exe" \
-    "$HOME/AppData/Local/Microsoft/dotnet/dotnet.exe" \
-    "$LOCALAPPDATA/Microsoft/dotnet/dotnet.exe"; do
+    "/mnt/c/Program Files (x86)/dotnet/dotnet.exe"; do
     if [ -f "$candidate" ]; then
         DOTNET="$candidate"
         break
     fi
 done
 
-if [ -z "$DOTNET" ] && command -v dotnet >/dev/null 2>&1; then
-    DOTNET="dotnet"
+# Fallback to PATH lookup. WSL bash needs .exe spelled out; Git Bash doesn't.
+if [ -z "$DOTNET" ]; then
+    if command -v dotnet >/dev/null 2>&1; then
+        DOTNET="dotnet"
+    elif command -v dotnet.exe >/dev/null 2>&1; then
+        DOTNET="dotnet.exe"
+    fi
 fi
 
 if [ -z "$DOTNET" ]; then
-    echo "[pre-push] dotnet not found. Tried:" >&2
-    echo "[pre-push]   C:\\Program Files\\dotnet\\dotnet.exe" >&2
-    echo "[pre-push]   C:\\Program Files (x86)\\dotnet\\dotnet.exe" >&2
-    echo "[pre-push]   %LOCALAPPDATA%\\Microsoft\\dotnet\\dotnet.exe" >&2
-    echo "[pre-push]   PATH=$PATH" >&2
+    echo "[pre-push] dotnet not found." >&2
+    echo "[pre-push] PATH=$PATH" >&2
     exit 1
 fi
 

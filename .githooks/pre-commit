@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+echo "[pre-commit] starting..." >&2
+
+set -e
+
+# Cross-shell dotnet lookup: this hook can run under Git Bash (/c/...) or
+# Visual Studio's WSL bash (/mnt/c/...).
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    WIN_C="/mnt/c"
+else
+    WIN_C="/c"
+fi
+
+DOTNET=""
+for candidate in \
+    "$WIN_C/Program Files/dotnet/dotnet.exe" \
+    "$WIN_C/Program Files (x86)/dotnet/dotnet.exe" \
+    "/c/Program Files/dotnet/dotnet.exe" \
+    "/mnt/c/Program Files/dotnet/dotnet.exe" \
+    "/c/Program Files (x86)/dotnet/dotnet.exe" \
+    "/mnt/c/Program Files (x86)/dotnet/dotnet.exe"; do
+    if [ -f "$candidate" ]; then
+        DOTNET="$candidate"
+        break
+    fi
+done
+
+if [ -z "$DOTNET" ]; then
+    if command -v dotnet >/dev/null 2>&1; then
+        DOTNET="dotnet"
+    elif command -v dotnet.exe >/dev/null 2>&1; then
+        DOTNET="dotnet.exe"
+    fi
+fi
+
+if [ -z "$DOTNET" ]; then
+    echo "[pre-commit] dotnet not found." >&2
+    echo "[pre-commit] PATH=$PATH" >&2
+    exit 1
+fi
+
+echo "[pre-commit] dotnet format --verify-no-changes ..." >&2
+
+if ! "$DOTNET" format ActionsShowcase.slnx --verify-no-changes --no-restore; then
+    echo "" >&2
+    echo "[pre-commit] Formatting issues detected." >&2
+    echo "[pre-commit] Run:   dotnet format ActionsShowcase.slnx" >&2
+    echo "[pre-commit] Then stage the changes and commit again." >&2
+    echo "[pre-commit] To bypass once: git commit --no-verify" >&2
+    exit 1
+fi
