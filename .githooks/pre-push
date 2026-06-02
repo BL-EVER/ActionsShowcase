@@ -1,23 +1,39 @@
 #!/usr/bin/env bash
-# Always print *something* up front so we can tell from VS's "Output ->
-# Source Control - Git" pane whether the hook even fired.
+# Print up front so it's obvious the hook fired (CLI or VS Output > Source Control - Git).
 echo "[pre-push] starting..." >&2
 
 set -e
 
-# When invoked from Visual Studio, PATH may not contain dotnet (VS inherits
-# the PATH of whatever process started it). Prepend the standard install
-# location, and fall back to dotnet.exe by absolute path if needed.
-export PATH="/c/Program Files/dotnet:$PATH"
+# Locate dotnet. Visual Studio's git child process often has a stripped PATH
+# (no dotnet entry), so probe the canonical install locations first and only
+# fall back to PATH. Use -f (file exists), not -x: Windows .exe files under
+# Program Files don't carry the Unix executable bit that Git Bash's -x checks.
+DOTNET=""
+for candidate in \
+    "/c/Program Files/dotnet/dotnet.exe" \
+    "/c/Program Files (x86)/dotnet/dotnet.exe" \
+    "$HOME/AppData/Local/Microsoft/dotnet/dotnet.exe" \
+    "$LOCALAPPDATA/Microsoft/dotnet/dotnet.exe"; do
+    if [ -f "$candidate" ]; then
+        DOTNET="$candidate"
+        break
+    fi
+done
 
-if command -v dotnet >/dev/null 2>&1; then
+if [ -z "$DOTNET" ] && command -v dotnet >/dev/null 2>&1; then
     DOTNET="dotnet"
-elif [ -x "/c/Program Files/dotnet/dotnet.exe" ]; then
-    DOTNET="/c/Program Files/dotnet/dotnet.exe"
-else
-    echo "[pre-push] dotnet not found on PATH or at /c/Program Files/dotnet" >&2
+fi
+
+if [ -z "$DOTNET" ]; then
+    echo "[pre-push] dotnet not found. Tried:" >&2
+    echo "[pre-push]   C:\\Program Files\\dotnet\\dotnet.exe" >&2
+    echo "[pre-push]   C:\\Program Files (x86)\\dotnet\\dotnet.exe" >&2
+    echo "[pre-push]   %LOCALAPPDATA%\\Microsoft\\dotnet\\dotnet.exe" >&2
+    echo "[pre-push]   PATH=$PATH" >&2
     exit 1
 fi
+
+echo "[pre-push] using $DOTNET" >&2
 
 echo "[pre-push] dotnet build (Release)..." >&2
 "$DOTNET" build ActionsShowcase.slnx --configuration Release --nologo
