@@ -131,7 +131,7 @@ jobs:
         run: docker load -i image.tar
 
       - name: Run Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: actionsshowcase:${{ github.sha }}
           format: sarif
@@ -156,7 +156,7 @@ jobs:
 
       - name: Render Trivy summary table
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: actionsshowcase:${{ github.sha }}
           format: table
