@@ -156,7 +156,8 @@ Runs on `main` only, after `docker-build`.
 3. SARIF is uploaded to the GitHub Security tab via `github/codeql-action/upload-sarif@v3`. This step has `continue-on-error: true` so the pipeline still passes when Code Scanning is disabled (private repo without Advanced Security, or simply not enabled yet).
 4. A second Trivy run produces a plain-text table that is appended to the job summary so findings are visible without leaving the Actions tab. The SARIF is also uploaded as the `trivy-results` artifact.
 
-To see findings in the Security tab: repo **Security → Code scanning → Set up**. Free on public repos; private repos require GitHub Advanced Security.
+To see findings in the Security tab: repo **Security → Code scanning → Set up**. 
+**Free on public repos; private repos require GitHub Advanced Security.**
 
 ### Job: `trufflehog` — secret scan
 
