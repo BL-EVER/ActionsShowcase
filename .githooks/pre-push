@@ -1,9 +1,29 @@
 #!/usr/bin/env bash
+# Always print *something* up front so we can tell from VS's "Output ->
+# Source Control - Git" pane whether the hook even fired.
+echo "[pre-push] starting..." >&2
+
 set -e
 
-echo "[pre-push] dotnet build (Release) ..."
-dotnet build ActionsShowcase.slnx --configuration Release --nologo --verbosity quiet
+# When invoked from Visual Studio, PATH may not contain dotnet (VS inherits
+# the PATH of whatever process started it). Prepend the standard install
+# location, and fall back to dotnet.exe by absolute path if needed.
+export PATH="/c/Program Files/dotnet:$PATH"
 
-echo "[pre-push] dotnet test (unit) ..."
-dotnet test ActionsShowcase.Tests.Unit/ActionsShowcase.Tests.Unit.csproj \
-    --no-build --configuration Release --nologo --verbosity quiet
+if command -v dotnet >/dev/null 2>&1; then
+    DOTNET="dotnet"
+elif [ -x "/c/Program Files/dotnet/dotnet.exe" ]; then
+    DOTNET="/c/Program Files/dotnet/dotnet.exe"
+else
+    echo "[pre-push] dotnet not found on PATH or at /c/Program Files/dotnet" >&2
+    exit 1
+fi
+
+echo "[pre-push] dotnet build (Release)..." >&2
+"$DOTNET" build ActionsShowcase.slnx --configuration Release --nologo
+
+echo "[pre-push] dotnet test (unit)..." >&2
+"$DOTNET" test ActionsShowcase.Tests.Unit/ActionsShowcase.Tests.Unit.csproj \
+    --no-build --configuration Release --nologo
+
+echo "[pre-push] OK" >&2

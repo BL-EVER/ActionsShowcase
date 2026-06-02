@@ -1,0 +1,4 @@
+# Git hook scripts must be LF — bash on Windows fails with CRLF (it looks
+# for an executable named "bash\r" and silently aborts the hook).
+.githooks/* text eol=lf
+*.sh         text eol=lf
