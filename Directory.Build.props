@@ -1,14 +1,25 @@
 <Project>
 
+  <!--
+    First-time, idempotent activation of the in-repo Git hooks.
+    Runs once per clone: drops a marker under .git/ once the config is set,
+    so subsequent builds (including those triggered from inside a git hook,
+    where .git/config is already locked) are no-ops.
+  -->
   <Target Name="ConfigureGitHooksPath"
           BeforeTargets="BeforeBuild"
-          Condition=" Exists('$(MSBuildThisFileDirectory).git') And Exists('$(MSBuildThisFileDirectory).githooks') ">
+          Condition=" Exists('$(MSBuildThisFileDirectory).git')
+                  And Exists('$(MSBuildThisFileDirectory).githooks')
+                  And !Exists('$(MSBuildThisFileDirectory).git/.hooks-configured') ">
     <Exec Command="git config core.hooksPath .githooks"
           WorkingDirectory="$(MSBuildThisFileDirectory)"
           ContinueOnError="true"
           IgnoreExitCode="true"
           StandardOutputImportance="low"
           StandardErrorImportance="low" />
+    <WriteLinesToFile File="$(MSBuildThisFileDirectory).git/.hooks-configured"
+                      Lines="configured"
+                      Overwrite="true" />
   </Target>
 
 </Project>
