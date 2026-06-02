@@ -155,25 +155,36 @@ jobs:
           name: trivy-results
           path: trivy-results.sarif
 
-      - name: Render Trivy summary table
+      - name: Render Trivy report as markdown
         if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: actionsshowcase:${{ github.sha }}
-          format: table
+          format: template
+          template: '@.github/trivy-markdown.tpl'
           severity: CRITICAL,HIGH,MEDIUM
           exit-code: '0'
           ignore-unfixed: true
-          output: trivy-results.txt
+          output: trivy-report.md
+
+      - name: Upload Trivy markdown artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-report
+          path: trivy-report.md
 
       - name: Add Trivy results to job summary
         if: always()
         run: |
-          if [ -f trivy-results.txt ]; then
-            echo "## Trivy vulnerability scan" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            cat trivy-results.txt >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ -s trivy-report.md ] && grep -q '^| ' trivy-report.md; then
+            cat trivy-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Trivy vulnerability scan"
+              echo ""
+              echo "_No vulnerabilities found at CRITICAL / HIGH / MEDIUM severity._"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
   trufflehog:
