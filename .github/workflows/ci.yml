@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches: [main, development]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  CONFIG: Release
+
+jobs:
+  test:
+    name: Build & test (unit + service)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore ActionsShowcase.slnx
+
+      - name: Build
+        run: dotnet build ActionsShowcase.slnx --no-restore --configuration ${{ env.CONFIG }}
+
+      - name: Run unit tests (with coverage)
+        run: |
+          dotnet test ActionsShowcase.Tests.Unit/ActionsShowcase.Tests.Unit.csproj \
+            --no-build --configuration ${{ env.CONFIG }} \
+            --collect:"XPlat Code Coverage" \
+            --settings ActionsShowcase.Tests.Unit/coverlet.runsettings \
+            --results-directory TestResults/Unit \
+            --logger "trx;LogFileName=unit-tests.trx"
+
+      - name: Run service tests
+        run: |
+          dotnet test ActionsShowcase.Tests.Service/ActionsShowcase.Tests.Service.csproj \
+            --no-build --configuration ${{ env.CONFIG }} \
+            --results-directory TestResults/Service \
+            --logger "trx;LogFileName=service-tests.trx"
+
+      - name: Generate coverage summary
+        if: always()
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: TestResults/Unit/**/coverage.cobertura.xml
+          badge: true
+          format: markdown
+          output: both
+          hide_complexity: true
+          thresholds: '60 80'
+
+      - name: Add coverage summary to job summary
+        if: always()
+        run: |
+          if [ -f code-coverage-results.md ]; then
+            echo "## Code coverage" >> "$GITHUB_STEP_SUMMARY"
+            cat code-coverage-results.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-coverage
+          path: |
+            TestResults/Unit/**/coverage.cobertura.xml
+            code-coverage-results.md
+
+      - name: Upload test result (trx) artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/**/*.trx
+
+  docker-build:
+    name: Docker build (.NET SDK)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Build container image via dotnet publish
+        run: |
+          dotnet publish ActionsShowcase/ActionsShowcase.csproj \
+            --configuration ${{ env.CONFIG }} \
+            -t:PublishContainer \
+            -p:ContainerRepository=actionsshowcase \
+            -p:ContainerImageTag=${{ github.sha }}
+
+      - name: Export image to tarball
+        run: docker save actionsshowcase:${{ github.sha }} -o image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-image
+          path: image.tar
+          retention-days: 7
+
+  trivy:
+    name: Trivy image scan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: docker-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download container image
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+
+      - name: Load image
+        run: docker load -i image.tar
+
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: actionsshowcase:${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: '0'
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+      - name: Upload Trivy SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
+
+      - name: Render Trivy summary table
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: actionsshowcase:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: '0'
+          ignore-unfixed: true
+          output: trivy-results.txt
+
+      - name: Add Trivy results to job summary
+        if: always()
+        run: |
+          if [ -f trivy-results.txt ]; then
+            echo "## Trivy vulnerability scan" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat trivy-results.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  trufflehog:
+    name: TruffleHog secret scan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run TruffleHog
+        id: trufflehog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --results=verified,unknown
+
+      - name: Add TruffleHog status to job summary
+        if: always()
+        run: |
+          echo "## TruffleHog secret scan" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.trufflehog.outcome }}" = "success" ]; then
+            echo "No verified or unknown secrets detected." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "TruffleHog found potential secrets — review the step log above." >> "$GITHUB_STEP_SUMMARY"
+          fi
