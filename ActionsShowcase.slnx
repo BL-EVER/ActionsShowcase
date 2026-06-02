@@ -6,7 +6,6 @@
     <File Path="README.md" />
   </Folder>
   <Folder Name="/Solution Items/githooks/">
-    <File Path=".githooks/pre-commit" />
     <File Path=".githooks/pre-push" />
     <File Path=".githooks/prepare-commit-msg" />
   </Folder>
