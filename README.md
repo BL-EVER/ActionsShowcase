@@ -1,6 +1,6 @@
 # ActionsShowcase
 
-A small ASP.NET Core 10 Web API used to demonstrate a full local + CI workflow: build, unit tests with coverage, BDD service tests in containers, container image build, vulnerability scanning, secret scanning, and Git-side guard rails via hooks.
+A small ASP.NET Core 10 Web API used to demonstrate a full local + CI workflow: build, unit tests with coverage and an enforced threshold, BDD service tests in containers, container image build, vulnerability scanning, secret scanning, and Git-side guard rails via hooks.
 
 ## Solution layout
 
@@ -42,18 +42,13 @@ Hooks live under `.githooks/` in source control rather than inside `.git/hooks/`
 
 ### Activation
 
-You don't need to do anything manually — `Directory.Build.props` at the repo root runs `git config core.hooksPath .githooks` before every build, gated on both `.git` and `.githooks` existing. So after the first `dotnet build` on a fresh clone, hooks are live.
+You don't need to do anything manually — `Directory.Build.props` at the repo root runs `git config core.hooksPath .githooks` on the first build and writes a marker at `.git/.hooks-configured`. Subsequent builds skip the step. This matters because a `dotnet build` triggered from inside a `git push` runs while `.git/config` is locked; without the marker, the inner `git config` would warn (and on Visual Studio that warning bubbles up as a failed push).
 
-To opt in manually without building:
-
-```
-git config core.hooksPath .githooks
-```
-
-To opt out:
+Manual one-liners:
 
 ```
-git config --unset core.hooksPath
+git config core.hooksPath .githooks      # opt in
+git config --unset core.hooksPath        # opt out
 ```
 
 ### What each hook does
@@ -64,6 +59,8 @@ git config --unset core.hooksPath
 | `.githooks/pre-push` | `git push` | Runs `dotnet build -c Release` and the unit tests (`--no-build`). Service tests are intentionally excluded so push isn't slow or Docker-dependent. |
 | `.githooks/prepare-commit-msg` | Every commit message is prepared | Prepends `[branch-name] ` to the commit message. Skips merge/squash/amend commits and the long-lived branches `main`/`master`/`develop`/`development`. Idempotent — won't double-prefix. |
 
+Both `pre-commit` and `pre-push` detect their shell — **Git Bash** (paths under `/c/...`) or **WSL bash** (paths under `/mnt/c/...`) — via `/proc/version` and probe `dotnet.exe` in both `Program Files\dotnet` and `Program Files (x86)\dotnet`, falling back to a `dotnet`/`dotnet.exe` PATH lookup. This is needed because `#!/usr/bin/env bash` may resolve to WSL bash when invoked from Visual Studio, while a CLI/PowerShell push uses Git for Windows' mingw bash.
+
 ### Bypassing a hook
 
 ```
@@ -71,71 +68,85 @@ git commit --no-verify   # skips pre-commit + commit-msg + prepare-commit-msg
 git push   --no-verify   # skips pre-push
 ```
 
-### Cross-platform contributors
+### Line endings and cross-platform
 
-On Windows, Git runs hooks via the bundled bash, no executable bit needed. For macOS/Linux contributors, set the executable bit in the index so the hooks are runnable everywhere:
+`.gitattributes` pins `.githooks/*` and `*.sh` to LF. This is required on Windows because bash silently fails to invoke a hook whose shebang line ends in CRLF — it tries to exec a binary literally named `bash\r`.
+
+For macOS/Linux contributors, set the executable bit in the index so the hooks are runnable there too:
 
 ```
 git update-index --chmod=+x .githooks/pre-commit .githooks/pre-push .githooks/prepare-commit-msg
 ```
 
+### Known limitation: `prepare-commit-msg` in Visual Studio
+
+VS's commit UI reads the message from its own text box, not from `.git/COMMIT_EDITMSG`, so the branch-name prefix is only applied to commits made from the CLI. Commit from the terminal when you want the prefix.
+
 ---
 
 ## CI pipeline (`.github/workflows/ci.yml`)
 
-### Trigger
+### Triggers
 
 ```yaml
 on:
   push:
     branches: [main, development]
-  workflow_dispatch:   # manual run from the Actions tab
+  pull_request:
+    branches: [main, development]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 ```
+
+Every PR targeting `main` or `development` runs the build + tests + coverage gate. The concurrency block cancels in-progress runs when new commits land on the same ref (e.g. a PR force-push) so older runs don't waste minutes.
 
 ### Job graph
 
 ```
-        push to development                         push to main
-              │                                          │
-              ▼                                          ▼
-        ┌───────────┐                             ┌───────────┐    ┌────────────┐
-        │   test    │                             │   test    │    │ trufflehog │
-        └───────────┘                             └─────┬─────┘    └────────────┘
-        ┌───────────┐                                   ▼
-        │trufflehog │                            ┌──────────────┐
-        └───────────┘                            │ docker-build │
-                                                 └──────┬───────┘
-                                                        ▼
-                                                 ┌──────────────┐
-                                                 │    trivy     │
-                                                 └──────────────┘
+        PR / push to development            push to main
+              │                                  │
+              ▼                                  ▼
+        ┌───────────┐                      ┌───────────┐    ┌────────────┐
+        │   test    │                      │   test    │    │ trufflehog │
+        └───────────┘                      └─────┬─────┘    └────────────┘
+        ┌───────────┐                            ▼
+        │trufflehog │                     ┌──────────────┐
+        └───────────┘                     │ docker-build │
+                                          └──────┬───────┘
+                                                 ▼
+                                          ┌──────────────┐
+                                          │    trivy     │
+                                          └──────────────┘
 ```
 
-`test` and `trufflehog` run on both branches. `docker-build` and `trivy` run on `main` only.
+`test` and `trufflehog` run on every PR and every push to `main`/`development`. `docker-build` and `trivy` are gated to pushes on `main` only.
 
 ### Permissions
 
 ```yaml
 permissions:
-  contents: read           # actions/checkout
-  security-events: write   # Trivy SARIF upload to the Security tab
+  contents: read
+  security-events: write   # Trivy SARIF upload to GitHub Security tab
   actions: read
 ```
 
-### Job: `test` — build & test (unit + service)
+### Job: `test` — build, tests, and 80 % coverage gate
 
-1. `actions/checkout@v4`, then `actions/setup-dotnet@v4` pinned to `10.0.x`.
-2. `dotnet restore ActionsShowcase.slnx` then `dotnet build --no-restore`.
-3. **Unit tests with coverage**: `dotnet test ... --collect:"XPlat Code Coverage" --settings ActionsShowcase.Tests.Unit/coverlet.runsettings`. The runsettings file excludes generated code so coverage reflects only user code.
-4. **Service tests**: `dotnet test` against the Tests.Service project. Inside, the test fixture spins up the API via `dotnet publish -t:PublishContainer` and Testcontainers. The hosted Ubuntu runner has Docker preinstalled.
-5. **Coverage summary**: `irongut/CodeCoverageSummary@v1.3.0` converts the Cobertura XML into a markdown table that is appended to `$GITHUB_STEP_SUMMARY` (shown on the run's summary page). Thresholds `60 80` colour the badge red/yellow/green.
-6. **Artifacts** uploaded with `if: always()` so they survive a test failure:
+1. `actions/checkout@v6`, then `actions/setup-dotnet@v5` pinned to `10.0.x`.
+2. `dotnet restore ActionsShowcase.slnx` then `dotnet build --no-restore -c Release`.
+3. **Unit tests with coverage**: `dotnet test ... --collect:"XPlat Code Coverage" --settings ActionsShowcase.Tests.Unit/coverlet.runsettings`. The runsettings file excludes generated code so coverage reflects user code only.
+4. **Service tests**: `dotnet test` against the Tests.Service project. Inside, the test fixture spins up the API via `dotnet publish -t:PublishContainer` and Testcontainers (the hosted Ubuntu runner has Docker preinstalled).
+5. **Coverage summary + 80 % gate**: `irongut/CodeCoverageSummary@v1.3.0` converts the Cobertura XML into a markdown badge + table appended to `$GITHUB_STEP_SUMMARY`. With `thresholds: '80 80'` and `fail_below_min: true`, the action exits non-zero when line coverage drops below 80 %, failing the job.
+6. **Artifacts** (`if: always()` so they survive a test or coverage failure):
     - `code-coverage` — raw `coverage.cobertura.xml` + the rendered markdown.
     - `test-results` — `*.trx` files from both test projects.
 
 ### Job: `docker-build` — image via .NET SDK
 
-Runs on `main` only, after `test` passes.
+Runs only on push to `main`, after `test` passes.
 
 ```
 dotnet publish ActionsShowcase/ActionsShowcase.csproj \
@@ -145,41 +156,53 @@ dotnet publish ActionsShowcase/ActionsShowcase.csproj \
     -p:ContainerImageTag=${{ github.sha }}
 ```
 
-The SDK builds an OCI image without a Dockerfile (driven by the `<ContainerBaseImage>` and `<ContainerPort>` settings in `ActionsShowcase.csproj`). The image is exported with `docker save` to `image.tar` and uploaded as the `container-image` artifact so the next job can load it without rebuilding.
+The SDK builds an OCI image without a Dockerfile (driven by `<ContainerBaseImage>` and `<ContainerPort>` in `ActionsShowcase.csproj`). The image is exported with `docker save` to `image.tar` and uploaded as the `container-image` artifact so `trivy` can load it without rebuilding.
 
 ### Job: `trivy` — image vulnerability scan
 
-Runs on `main` only, after `docker-build`.
+Runs only on push to `main`, after `docker-build`.
 
 1. Downloads the `container-image` artifact and `docker load`s it.
-2. `aquasecurity/trivy-action@v0.36.0` scans the image at `CRITICAL,HIGH,MEDIUM`, `--ignore-unfixed`, writing SARIF to `trivy-results.sarif`. `exit-code: '0'` means findings don't fail the job — change to `'1'` to gate merges.
-3. SARIF is uploaded to the GitHub Security tab via `github/codeql-action/upload-sarif@v3`. This step has `continue-on-error: true` so the pipeline still passes when Code Scanning is disabled (private repo without Advanced Security, or simply not enabled yet).
-4. A second Trivy run produces a plain-text table that is appended to the job summary so findings are visible without leaving the Actions tab. The SARIF is also uploaded as the `trivy-results` artifact.
+2. `aquasecurity/trivy-action@v0.36.0` scans the image at `CRITICAL,HIGH,MEDIUM`, `--ignore-unfixed`, writing SARIF to `trivy-results.sarif`. `exit-code: '0'` so findings don't fail the job — flip to `'1'` to gate.
+3. SARIF is uploaded to the Security tab via `github/codeql-action/upload-sarif@v4` (`continue-on-error: true` so the pipeline still passes when Code Scanning isn't enabled — private repo without Advanced Security, or simply not yet enabled).
+4. A second Trivy run uses `format: template` with `.github/trivy-markdown.tpl` to render `trivy-report.md` — one `###` section per scan target, a real markdown table per section (Severity / CVE link / Package / Installed / Fixed in / Title), with pipes in titles escaped so a noisy field can't break the layout.
+5. `trivy-report.md` is uploaded as the `trivy-report` artifact and `cat`'d straight into the job summary (no code fence — it's already markdown). If no table rows are present, a "No vulnerabilities found" note is written instead.
 
-To see findings in the Security tab: repo **Security → Code scanning → Set up**. 
-**Free on public repos; private repos require GitHub Advanced Security.**
+To make Security-tab findings appear: repo **Security → Code scanning → Set up**. Free on public repos; private repos need GitHub Advanced Security.
 
 ### Job: `trufflehog` — secret scan
 
-Runs on both `main` and `development`, parallel to everything else (no `needs:`).
+Runs on every PR and push to `main`/`development`, in parallel with everything else (no `needs:`).
 
-1. `actions/checkout@v4` with `fetch-depth: 0` so TruffleHog can walk git history.
-2. `trufflesecurity/trufflehog@main` runs with `--results=verified,unknown`. The action exits non-zero when it surfaces a finding, which fails the job.
-3. The follow-up summary step (with `if: always()`) writes a one-line status (clean vs. findings present) into the job summary so it shows up on the Actions run page even when the job is red.
+1. `actions/checkout@v6` with `fetch-depth: 0` so TruffleHog can walk git history.
+2. `trufflesecurity/trufflehog@main` runs with `--results=verified,unknown`. The action exits non-zero on findings, failing the job.
+3. A follow-up summary step (`if: always()`) writes a one-line status to the job summary so it shows up on the Actions run page even when the job is red.
+
+### Required PR status check
+
+The 80 % coverage gate and build/test failures only **block** merges if you require the matching status check on the protected branches. One time, per protected branch:
+
+1. **Settings → Branches → Branch protection rules → Add rule** (or **Rulesets** in the newer UI).
+2. Pattern: `main` (repeat for `development`).
+3. Tick **Require status checks to pass before merging**.
+4. Search for and add the check named **`Build & test (unit + service)`** (the `name:` of the `test` job).
+5. Optionally tick **Require branches to be up to date before merging**.
+
+After this, a PR with a failing build, failing test, or coverage < 80 % can't be merged.
 
 ### Where outputs land
 
 | Output | Location |
 |---|---|
-| Coverage summary, Trivy table, TruffleHog status | Run page **Summary** tab (`$GITHUB_STEP_SUMMARY`) |
-| `coverage.cobertura.xml`, `*.trx`, `image.tar`, `trivy-results.sarif` | Run page **Artifacts** section |
+| Coverage summary, Trivy markdown report, TruffleHog status | Run page **Summary** tab (`$GITHUB_STEP_SUMMARY`) |
+| `coverage.cobertura.xml`, `*.trx`, `image.tar`, `trivy-results.sarif`, `trivy-report.md` | Run page **Artifacts** section |
 | Trivy SARIF findings | Repo **Security → Code scanning alerts** (if Code Scanning is enabled) |
 | TruffleHog findings detail | Step log of the `trufflehog` job |
 
 ### Tweaking knobs
 
-- **Gate merges on Trivy findings**: set `exit-code: '1'` on the `Run Trivy` step.
+- **Gate merges on Trivy findings**: set `exit-code: '1'` on the first Trivy step.
 - **Trim severity**: change `severity: CRITICAL,HIGH,MEDIUM` on both Trivy steps.
-- **Run service tests on PRs**: add `pull_request:` to the `on:` block.
+- **Change the coverage threshold**: edit `thresholds:` on the coverage step (the lower number is the failure threshold; set both equal to fail at that value).
 - **Change .NET SDK version**: edit `DOTNET_VERSION` in the `env:` block.
-- **Disable a hook locally**: `git config core.hooksPath ''` or pass `--no-verify`.
+- **Disable a hook locally**: pass `--no-verify` or `git config --unset core.hooksPath`.
