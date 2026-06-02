@@ -1,6 +1,14 @@
 <Solution>
   <Folder Name="/Solution Items/">
+    <File Path=".github/workflows/ci.yml" />
     <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/Solution Items/githooks/">
+    <File Path=".githooks/pre-commit" />
+    <File Path=".githooks/pre-push" />
+    <File Path=".githooks/prepare-commit-msg" />
   </Folder>
   <Project Path="ActionsShowcase.Tests.Service/ActionsShowcase.Tests.Service.csproj" Id="66587dbf-b15c-4e19-801b-26ae2e96725c" />
   <Project Path="ActionsShowcase.Tests.Unit/ActionsShowcase.Tests.Unit.csproj" />

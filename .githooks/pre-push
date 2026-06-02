@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -e
+
+echo "[pre-push] dotnet build (Release) ..."
+dotnet build ActionsShowcase.slnx --configuration Release --nologo --verbosity quiet
+
+echo "[pre-push] dotnet test (unit) ..."
+dotnet test ActionsShowcase.Tests.Unit/ActionsShowcase.Tests.Unit.csproj \
+    --no-build --configuration Release --nologo --verbosity quiet

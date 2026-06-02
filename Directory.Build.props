@@ -1,0 +1,14 @@
+<Project>
+
+  <Target Name="ConfigureGitHooksPath"
+          BeforeTargets="BeforeBuild"
+          Condition=" Exists('$(MSBuildThisFileDirectory).git') And Exists('$(MSBuildThisFileDirectory).githooks') ">
+    <Exec Command="git config core.hooksPath .githooks"
+          WorkingDirectory="$(MSBuildThisFileDirectory)"
+          ContinueOnError="true"
+          IgnoreExitCode="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low" />
+  </Target>
+
+</Project>

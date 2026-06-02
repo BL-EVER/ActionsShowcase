@@ -1,8 +1,8 @@
-using System.Diagnostics;
 using ActionsShowcase.Tests.Service.Infrastructure;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using Reqnroll;
+using System.Diagnostics;
 
 namespace ActionsShowcase.Tests.Service.Hooks;
 

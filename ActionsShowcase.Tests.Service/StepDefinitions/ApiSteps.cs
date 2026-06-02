@@ -1,7 +1,7 @@
-using System.Net;
-using System.Text.Json;
 using ActionsShowcase.Tests.Service.Infrastructure;
 using Reqnroll;
+using System.Net;
+using System.Text.Json;
 
 namespace ActionsShowcase.Tests.Service.StepDefinitions;
 

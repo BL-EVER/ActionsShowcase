@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Prepend the current branch name to the commit message as "[branch] ".
+# Skips merge/squash/amend commits and protected/long-lived branches.
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+
+case "$COMMIT_SOURCE" in
+    merge|squash|commit) exit 0 ;;
+esac
+
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+
+case "$BRANCH" in
+    ""|main|master|develop|development) exit 0 ;;
+esac
+
+FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE")
+if printf '%s' "$FIRST_LINE" | grep -q "^\[$BRANCH\]"; then
+    exit 0
+fi
+
+TMP=$(mktemp)
+{
+    printf '[%s] ' "$BRANCH"
+    cat "$COMMIT_MSG_FILE"
+} > "$TMP"
+mv "$TMP" "$COMMIT_MSG_FILE"
